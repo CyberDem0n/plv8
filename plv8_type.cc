@@ -270,10 +270,26 @@ ConvertJsonb(JsonbContainer *in) {
 	return JsonbIterate(&it, container);
 }
 
-static JsonbValue *
-JsonbObjectFromObject(JsonbParseState **pstate, Local<v8::Object> object);
-static JsonbValue *
-JsonbArrayFromArray(JsonbParseState **pstate, Local<v8::Object> object);
+#if PG_VERSION_NUM < 190000
+typedef struct JsonbInState
+{
+	JsonbParseState *parseState;
+	JsonbValue *result;
+} JsonbInState;
+
+static inline void
+plv8_pushJsonbValue(JsonbInState *st, JsonbIteratorToken tok, JsonbValue *jbv)
+{
+	st->result = pushJsonbValue(&st->parseState, tok, jbv);
+}
+#else
+#define plv8_pushJsonbValue(st, tok, jbv) pushJsonbValue(st, tok, jbv)
+#endif
+
+static void
+JsonbObjectFromObject(JsonbInState *pstate, Local<v8::Object> object);
+static void
+JsonbArrayFromArray(JsonbInState *pstate, Local<v8::Object> object);
 
 static void LogType(Local<v8::Value> val, bool asError = true) {
 	if( val->IsUndefined() )
@@ -386,8 +402,8 @@ TimeAs8601 (double millis) {
 	return buf;
 }
 
-static JsonbValue *
-JsonbFromValue(JsonbParseState **pstate, Local<v8::Value> value, JsonbIteratorToken type) {
+static void
+JsonbFromValue(JsonbInState *pstate, Local<v8::Value> value, JsonbIteratorToken type) {
 	Isolate *isolate = Isolate::GetCurrent();
 	Local<Context>		context = isolate->GetCurrentContext();
 	JsonbValue val;
@@ -405,7 +421,7 @@ JsonbFromValue(JsonbParseState **pstate, Local<v8::Value> value, JsonbIteratorTo
 		} else if (value->IsNull()) {
 			val.type = jbvNull;
 		} else if (value->IsUndefined()) {
-			return NULL;
+			return;
 		} else if (value->IsString()) {
 			val.type = jbvString;
 			v8::String::Utf8Value utf8(isolate, value->ToString(context).ToLocalChecked());
@@ -444,56 +460,53 @@ JsonbFromValue(JsonbParseState **pstate, Local<v8::Value> value, JsonbIteratorTo
 		}
 	}
 
-	return pushJsonbValue(pstate, type, &val);
+	plv8_pushJsonbValue(pstate, type, &val);
 }
 
-static JsonbValue *
-JsonbArrayFromArray(JsonbParseState **pstate, Local<v8::Object> object) {
+static void
+JsonbArrayFromArray(JsonbInState *pstate, Local<v8::Object> object) {
 	Isolate *isolate = Isolate::GetCurrent();
 	Local<Context>		context = isolate->GetCurrentContext();
-	JsonbValue *val = pushJsonbValue(pstate, WJB_BEGIN_ARRAY, NULL);
+	plv8_pushJsonbValue(pstate, WJB_BEGIN_ARRAY, NULL);
 	Local<v8::Array> a = Local<v8::Array>::Cast(object);
 	for (size_t i = 0; i < a->Length(); i++) {
 		Local<v8::Value> o = a->Get(context, i).ToLocalChecked();
 
 		if (o->IsArray()) {
-			val = JsonbArrayFromArray(pstate, Local<v8::Array>::Cast(o));
+			JsonbArrayFromArray(pstate, Local<v8::Array>::Cast(o));
 		} else if (o->IsObject()) {
-			val = JsonbObjectFromObject(pstate, Local<v8::Object>::Cast(o));
+			JsonbObjectFromObject(pstate, Local<v8::Object>::Cast(o));
 		} else {
-			val = JsonbFromValue(pstate, o, WJB_ELEM);
+			JsonbFromValue(pstate, o, WJB_ELEM);
 		}
 	}
 
-	val = pushJsonbValue(pstate, WJB_END_ARRAY, NULL);
-
-	return val;
+	plv8_pushJsonbValue(pstate, WJB_END_ARRAY, NULL);
 }
 
-static JsonbValue *
-JsonbObjectFromObject(JsonbParseState **pstate, Local<v8::Object> object) {
+static void
+JsonbObjectFromObject(JsonbInState *pstate, Local<v8::Object> object) {
 	Isolate *isolate = Isolate::GetCurrent();
 	Local<Context>		context = isolate->GetCurrentContext();
-	JsonbValue *val = pushJsonbValue(pstate, WJB_BEGIN_OBJECT, NULL);
+	plv8_pushJsonbValue(pstate, WJB_BEGIN_OBJECT, NULL);
 	Local<Array> arr = object->GetOwnPropertyNames(context).ToLocalChecked();
 
 	for (size_t i = 0; i < arr->Length(); i++) {
 		Local<v8::Value> v = arr->Get(context, i).ToLocalChecked();
-		val = JsonbFromValue(pstate, v, WJB_KEY);
+		JsonbFromValue(pstate, v, WJB_KEY);
 		Local<v8::Value> o = object->Get(context, v).ToLocalChecked();
 
 		if (o->IsDate()) {
-			val = JsonbFromValue(pstate, o, WJB_VALUE);
+			JsonbFromValue(pstate, o, WJB_VALUE);
 		} else if (o->IsArray()) {
-			val = JsonbArrayFromArray(pstate, Local<v8::Array>::Cast(o));
+			JsonbArrayFromArray(pstate, Local<v8::Array>::Cast(o));
 		} else if (o->IsObject()) {
-			val = JsonbObjectFromObject(pstate, Local<v8::Object>::Cast(o));
+			JsonbObjectFromObject(pstate, Local<v8::Object>::Cast(o));
 		} else {
-			val = JsonbFromValue(pstate, o, WJB_VALUE);
+			JsonbFromValue(pstate, o, WJB_VALUE);
 		}
 	}
-	val = pushJsonbValue(pstate, WJB_END_OBJECT, NULL);
-	return val;
+	plv8_pushJsonbValue(pstate, WJB_END_OBJECT, NULL);
 }
 
 static Jsonb *
@@ -508,23 +521,22 @@ ConvertObject(Local<v8::Object> object) {
 
 	MemoryContextSwitchTo(conversion_context);
 
-  JsonbParseState *pstate = NULL;
-  JsonbValue *val;
+  JsonbInState pstate = {0};
 
 	if (object->IsArray()) {
-		val = JsonbArrayFromArray(&pstate, object);
+		JsonbArrayFromArray(&pstate, object);
 	} else if (object->IsObject()) {
-		val = JsonbObjectFromObject(&pstate, object);
+		JsonbObjectFromObject(&pstate, object);
 	} else {
-		pushJsonbValue(&pstate, WJB_BEGIN_ARRAY, NULL);
+		plv8_pushJsonbValue(&pstate, WJB_BEGIN_ARRAY, NULL);
 		JsonbFromValue(&pstate, object, WJB_ELEM);
-		val = pushJsonbValue(&pstate, WJB_END_ARRAY, NULL);
-                val->val.array.rawScalar = true;
+		plv8_pushJsonbValue(&pstate, WJB_END_ARRAY, NULL);
+		pstate.result->val.array.rawScalar = true;
 	}
 
 	MemoryContextSwitchTo(oldcontext);
 
-	Jsonb *ret = JsonbValueToJsonb(val);
+	Jsonb *ret = JsonbValueToJsonb(pstate.result);
 	MemoryContextDelete(conversion_context);
   return ret;
 }

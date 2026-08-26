@@ -29,6 +29,7 @@ extern "C" {
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/guc_tables.h"
+#include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
