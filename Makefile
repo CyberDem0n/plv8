@@ -10,7 +10,7 @@ PG_CPPFLAGS := -fPIC -Wall -Wno-register -xc++
 
 SRCS = plv8.cc plv8_type.cc plv8_func.cc plv8_param.cc plv8_allocator.cc plv8_guc.cc
 OBJS = $(SRCS:.cc=.o)
-MODULE_big = plv8-$(PLV8_VERSION)
+MODULE_big = plv8
 EXTENSION = plv8
 PLV8_DATA = plv8.control plv8--$(PLV8_VERSION).sql
 
