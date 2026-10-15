@@ -49,7 +49,11 @@ void* ArrayAllocator::Allocate(size_t length) {
 void* ArrayAllocator::AllocateUninitialized(size_t length) {
 	if (check(length)) {
 		allocated += length;
-		return std::malloc(length);
+		// Must go through the wrapped (cage-aware) allocator: with V8_ENABLE_SANDBOX
+		// every ArrayBuffer backing store has to live inside the sandbox cage, and
+		// Free() releases through this->allocator, so raw std::malloc here would be
+		// both out-of-cage and an alloc/free mismatch.
+		return this->allocator->AllocateUninitialized(length);
 	} else {
 		return nullptr;
 	}

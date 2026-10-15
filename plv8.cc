@@ -243,11 +243,11 @@ size_t NearHeapLimitHandler(void* data, size_t current_heap_limit,
 }
 
 void PromiseRejectCB(PromiseRejectMessage rejection) {
-	auto event = rejection.GetEvent();
-	if (event == kPromiseRejectAfterResolved || event == kPromiseResolveAfterResolved)
-		return;
+	// kPromiseRejectAfterResolved / kPromiseResolveAfterResolved were removed in
+	// V8 15.x (the events no longer fire), so the old early-return guard for them
+	// is obsolete and has been dropped.
 	auto	promise = rejection.GetPromise();
-	auto	isolate = promise->GetIsolate();
+	auto	isolate = v8::Isolate::GetCurrent();
 
 	if (rejection.GetEvent() == v8::kPromiseHandlerAddedAfterReject) {
 		if (current_context->ignore_unhandled_promises) return;
@@ -801,7 +801,7 @@ static Local<v8::Value>
 DoCall(Local<Context> ctx, Handle<Function> fn, Handle<Object> receiver,
 	int nargs, Handle<v8::Value> args[], bool nonatomic)
 {
-	Isolate 	   *isolate = ctx->GetIsolate();
+	Isolate 	   *isolate = v8::Isolate::GetCurrent();
 	TryCatch		try_catch(isolate);
 
 	if (isolate->IsExecutionTerminating() || current_context->interrupted) {
@@ -1620,10 +1620,13 @@ CompileFunction(
 
 	v8::Local<v8::Script> script;
 	v8::Local<v8::Value> result;
-	if (current_context->interrupted) {
-		isolate->CancelTerminateExecution();
-		current_context->interrupted = false;
-	}
+	// Always clear any execution-termination left armed by a previous call.
+	// NearHeapLimitHandler/GCEpilogueCallback call TerminateExecution() to
+	// enforce the memory limit but do not set current_context->interrupted, so a
+	// stale terminate would otherwise fire on this Script::Run and surface as a
+	// bogus `null` exception instead of letting the function compile and run.
+	isolate->CancelTerminateExecution();
+	current_context->interrupted = false;
 	if (Script::Compile(isolate->GetCurrentContext(), source, &origin).ToLocal(&script)) {
 		if (!script.IsEmpty()) {
 			if (!script->Run(isolate->GetCurrentContext()).ToLocal(&result))

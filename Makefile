@@ -24,8 +24,6 @@ ifeq ($(OS),Windows_NT)
 	# noop for now
 else
 	SHLIB_LINK += -L$(V8_BUILD_DIR)
-	ABSL_LIB_DIRS = $(sort $(dir $(wildcard $(V8_BUILD_DIR)/v8/third_party/abseil-cpp/absl/*/libabsl_*.a)))
-	SHLIB_LINK += $(addprefix -L,$(ABSL_LIB_DIRS))
 	UNAME_S := $(shell uname -s)
 	ifeq ($(UNAME_S),Darwin)
 		CCFLAGS += -stdlib=libc++
@@ -53,7 +51,7 @@ $(V8_CMAKE_DIR)/README.md:
 	cd deps/v8-cmake && $(foreach patch,$(PATCH_V8),patch -p1 <../../$(patch) &&) true
 
 $(V8_BUILD_DIR)/libv8_snapshot.a: $(V8_CMAKE_DIR)/README.md
-	@cmake -S $(V8_CMAKE_DIR) -B $(V8_BUILD_DIR) -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Release $(V8_CMAKE_ARGS) && cmake --build $(V8_BUILD_DIR) -j$(NUMPROC) --target v8_snapshot
+	@cmake -S $(V8_CMAKE_DIR) -B $(V8_BUILD_DIR) -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Release $(V8_SANDBOX_CMAKE_ARGS) $(V8_CMAKE_ARGS) && cmake --build $(V8_BUILD_DIR) -j$(NUMPROC) --target v8_snapshot
 
 v8: $(V8_BUILD_DIR)/libv8_snapshot.a
 
@@ -65,6 +63,35 @@ V8_CMAKE_ARGS ?=
 CCFLAGS += -DJSONB_DIRECT_CONVERSION
 
 CCFLAGS += -I$(V8_CMAKE_DIR)/v8/include -Wno-pointer-arith -Wno-comment
+
+# Pointer compression + V8 sandbox. These are ABI-affecting, so the SAME switches
+# drive the v8-cmake configure (V8_SANDBOX_CMAKE_ARGS, so the library matches) and
+# the -D defines below (so this embedder matches). A mismatch aborts the backend
+# at isolate init. Default on; override on the make command line, e.g.
+# `make V8_ENABLE_SANDBOX=0` or `make V8_ENABLE_POINTER_COMPRESSION=0 V8_ENABLE_SANDBOX=0`.
+V8_ENABLE_POINTER_COMPRESSION ?= 1
+V8_ENABLE_SANDBOX ?= 1
+
+ifeq ($(V8_ENABLE_SANDBOX),1)
+override V8_ENABLE_POINTER_COMPRESSION := 1
+endif
+
+ifeq ($(V8_ENABLE_POINTER_COMPRESSION),1)
+CCFLAGS += -DV8_COMPRESS_POINTERS \
+	-DV8_COMPRESS_POINTERS_IN_SHARED_CAGE \
+	-DV8_31BIT_SMIS_ON_64BIT_ARCH \
+	-DV8_EXTERNAL_CODE_SPACE
+V8_SANDBOX_CMAKE_ARGS += -DV8_ENABLE_POINTER_COMPRESSION=ON
+else
+V8_SANDBOX_CMAKE_ARGS += -DV8_ENABLE_POINTER_COMPRESSION=OFF
+endif
+
+ifeq ($(V8_ENABLE_SANDBOX),1)
+CCFLAGS += -DV8_ENABLE_SANDBOX
+V8_SANDBOX_CMAKE_ARGS += -DV8_ENABLE_SANDBOX=ON
+else
+V8_SANDBOX_CMAKE_ARGS += -DV8_ENABLE_SANDBOX=OFF
+endif
 
 ifdef EXECUTION_TIMEOUT
 	CCFLAGS += -DEXECUTION_TIMEOUT
@@ -87,32 +114,13 @@ else
 endif
 
 SHLIB_LINK += -Wl,--exclude-libs,ALL,--start-group \
-	-labsl_base \
-	-labsl_city \
-	-labsl_civil_time \
-	-labsl_debugging_internal \
-	-labsl_hash \
-	-labsl_hashtablez_sampler \
-	-labsl_kernel_timeout_internal \
-	-labsl_low_level_hash \
-	-labsl_malloc_internal \
-	-labsl_raw_hash_set \
-	-labsl_raw_logging_internal \
-	-labsl_spinlock_wait \
-	-labsl_stacktrace \
-	-labsl_strings \
-	-labsl_synchronization \
-	-labsl_throw_delegate \
-	-labsl_time_zone \
 	-lv8_base_without_compiler \
 	-lv8_compiler \
 	-lv8_libbase \
 	-lv8_libplatform \
 	-lv8_libsampler \
-	-lv8_simdutf \
 	-lv8_snapshot \
 	-lv8_torque_generated \
-	-Wl,--whole-archive -labsl_time -Wl,--no-whole-archive \
 	-Wl,--end-group
 
 OPTFLAGS = -std=c++20 -fno-rtti -O2
